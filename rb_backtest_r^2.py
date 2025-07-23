@@ -3,9 +3,9 @@
 evaluate_rushing_model.py
 
 1) Train on 2011–2023 top-10 rushers (loaded from your CSVs),
-   predicting each player’s next-season stats via full-table fetch.
+   predicting each player's next-season stats via full-table fetch.
 2) Back-test on seasons 2000–2009 → 2001–2010 (nlargest top-10).
-3) Report MAE & MAPE and save detailed predictions/errors.
+3) Report MAE, MAPE, and R² and save detailed predictions/errors.
 """
 
 import os
@@ -14,7 +14,7 @@ import requests
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 from sklearn.multioutput import MultiOutputRegressor
-from sklearn.metrics import mean_absolute_error
+from sklearn.metrics import mean_absolute_error, r2_score
 
 DATA_DIR = "."   # where top10_rushing_<year>.csv live
 HEADERS = {
@@ -129,8 +129,11 @@ def backtest(model, start_year=2000, end_year=2010):
         mae  = mean_absolute_error(df_preds[f'{stat}_act'], df_preds[f'{stat}_pred'])
         mape = (abs(df_preds[f'{stat}_act'] - df_preds[f'{stat}_pred']) /
                 df_preds[f'{stat}_act']).mean() * 100
+        r2   = r2_score(df_preds[f'{stat}_act'], df_preds[f'{stat}_pred'])
+        
         metrics[f'{stat}_MAE']  = mae
         metrics[f'{stat}_MAPE'] = mape
+        metrics[f'{stat}_R2']   = r2
 
     df_err = pd.DataFrame([metrics])
     return df_preds, df_err
