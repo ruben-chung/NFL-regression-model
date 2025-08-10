@@ -25,6 +25,43 @@ plt.style.use('seaborn-v0_8')
 sns.set_palette("husl")
 
 class WRProjectionModel:
+
+    def plot_true_vs_pred(self, y_true, y_pred, title="", outfile=None):
+        import matplotlib.pyplot as plt
+        import numpy as np
+        
+        # Ensure arrays
+        y_true = np.asarray(y_true)
+        y_pred = np.asarray(y_pred)
+        
+        # Fit best-fit line of y_true on y_pred
+        if len(y_pred) >= 2:
+            b1, b0 = np.polyfit(y_pred, y_true, 1)  # slope, intercept
+        else:
+            b1, b0 = 1.0, 0.0
+        
+        # Make plot
+        plt.figure()
+        plt.scatter(y_pred, y_true, alpha=0.6)
+        
+        # Identity line
+        xmin, xmax = float(np.min(y_pred)), float(np.max(y_pred))
+        xs = np.linspace(xmin, xmax, 100)
+        plt.plot(xs, xs, linestyle='--', linewidth=1, label='Identity y = x')
+        
+        # Best-fit line
+        plt.plot(xs, b1*xs + b0, linewidth=1.5, label=f'Best fit: y = {b1:.2f}x + {b0:.2f}')
+        
+        plt.xlabel("Predicted TDs")
+        plt.ylabel("Actual TDs")
+        plt.title(title if title else "Actual vs Predicted TDs (Linear Regression)")
+        plt.legend()
+        plt.tight_layout()
+        
+        if outfile:
+            plt.savefig(outfile, dpi=200, bbox_inches='tight')
+        plt.show()
+
     def __init__(self, data_dir="nfl_wr_data"):
         self.data_dir = Path(data_dir)
         self.scaler = StandardScaler()
@@ -186,6 +223,21 @@ class WRProjectionModel:
         feature_cols = [col for col in numeric_cols if col not in exclude_cols + target_cols]
         
         print(f"  📊 Using {len(feature_cols)} numeric features to predict TDs")
+        # --- Deduplicate engineered vs raw percent-style columns ---
+        # Keep engineered Catch_Rate (drop raw Ctch%) and keep Yards_Per_Game (drop raw Y/G)
+        to_drop = []
+        if 'Catch_Rate' in feature_cols and 'Ctch%' in feature_cols:
+            to_drop.append('Ctch%')
+        if 'Yards_Per_Game' in feature_cols and 'Y/G' in feature_cols:
+            to_drop.append('Y/G')
+        if to_drop:
+            feature_cols = [c for c in feature_cols if c not in to_drop]
+            # Drop from dataframes so they do not appear in plots/exports
+            for c in to_drop:
+                if c in df.columns:
+                    df.drop(columns=[c], inplace=True, errors='ignore')
+        print(f"  🧹 Dropped redundant columns: {to_drop}" if to_drop else "  🧹 No redundant columns found")
+
         
         # Filter to players with minimum activity (focus on players with receiving activity)
         df_model = df[(df['G'] >= 4) & (df['Tgt'] >= 10)].copy()  # Minimum thresholds
@@ -277,6 +329,14 @@ class WRProjectionModel:
             mae = mean_absolute_error(y_test, y_pred)
             rmse = np.sqrt(mean_squared_error(y_test, y_pred))
             r2 = r2_score(y_test, y_pred)
+            # Plot true vs predicted with best-fit line
+            try:
+                self.plot_true_vs_pred(y_test, y_pred,
+                                      title=f"Actual vs Predicted TDs — Test Set (R²={r2:.3f}, MAE={mae:.2f})",
+                                      outfile="/mnt/data/linear_best_fit.png")
+                print("    📈 Saved plot to /mnt/data/linear_best_fit.png")
+            except Exception as e:
+                print(f"    ⚠️ Could not plot: {e}")
             
             results[target_name] = {
                 'MAE': mae,

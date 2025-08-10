@@ -25,6 +25,43 @@ plt.style.use('seaborn-v0_8')
 sns.set_palette("husl")
 
 class WRProjectionModel:
+
+    def plot_true_vs_pred(self, y_true, y_pred, title="", outfile=None):
+        import matplotlib.pyplot as plt
+        import numpy as np
+        
+        # Ensure arrays
+        y_true = np.asarray(y_true)
+        y_pred = np.asarray(y_pred)
+        
+        # Fit best-fit line of y_true on y_pred
+        if len(y_pred) >= 2:
+            b1, b0 = np.polyfit(y_pred, y_true, 1)  # slope, intercept
+        else:
+            b1, b0 = 1.0, 0.0
+        
+        # Make plot
+        plt.figure()
+        plt.scatter(y_pred, y_true, alpha=0.6)
+        
+        # Identity line
+        xmin, xmax = float(np.min(y_pred)), float(np.max(y_pred))
+        xs = np.linspace(xmin, xmax, 100)
+        plt.plot(xs, xs, linestyle='--', linewidth=1, label='Identity y = x')
+        
+        # Best-fit line
+        plt.plot(xs, b1*xs + b0, linewidth=1.5, label=f'Best fit: y = {b1:.2f}x + {b0:.2f}')
+        
+        plt.xlabel("Predicted TDs")
+        plt.ylabel("Actual TDs")
+        plt.title(title if title else "Actual vs Predicted TDs (Linear Regression)")
+        plt.legend()
+        plt.tight_layout()
+        
+        if outfile:
+            plt.savefig(outfile, dpi=200, bbox_inches='tight')
+        plt.show()
+
     def __init__(self, data_dir="nfl_wr_data"):
         self.data_dir = Path(data_dir)
         self.scaler = StandardScaler()
@@ -277,6 +314,14 @@ class WRProjectionModel:
             mae = mean_absolute_error(y_test, y_pred)
             rmse = np.sqrt(mean_squared_error(y_test, y_pred))
             r2 = r2_score(y_test, y_pred)
+            # Plot true vs predicted with best-fit line
+            try:
+                self.plot_true_vs_pred(y_test, y_pred,
+                                      title=f"Actual vs Predicted TDs — Test Set (R²={r2:.3f}, MAE={mae:.2f})",
+                                      outfile="/mnt/data/linear_best_fit.png")
+                print("    📈 Saved plot to /mnt/data/linear_best_fit.png")
+            except Exception as e:
+                print(f"    ⚠️ Could not plot: {e}")
             
             results[target_name] = {
                 'MAE': mae,
