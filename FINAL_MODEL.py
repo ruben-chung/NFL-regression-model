@@ -531,10 +531,6 @@ def main():
     # Run full analysis
     results = wr_model.run_full_analysis()
     
-    # Optional: Create projections for a specific year
-    print("\n" + "="*50)
-    print("💡 To create projections for a specific year, use:")
-    print("   proj_df = wr_model.create_projections(current_year_data)")
     
     return wr_model, results
 

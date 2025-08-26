@@ -1,0 +1,81 @@
+NFL RUSHING PREDICTION MODEL - PERFORMANCE REPORT
+============================================================
+Training Period: 1990-2010
+Testing Period: 2010-2024
+Total Predictions: 1,177
+Report Generated: 2025-07-21 18:39:33
+
+EXECUTIVE SUMMARY
+--------------------
+• Overall Model R²: 0.2687
+• Overall Correlation: 0.5349
+• Best Performing Target: Yards (R² = 0.2998)
+• Model shows weak predictive power
+
+ATTEMPTS PREDICTION PERFORMANCE
+------------------------------
+• R² Score: 0.3381
+• Mean Absolute Error: 56.18
+• Root Mean Square Error: 70.97
+• Mean Absolute Percentage Error: 284.4%
+• Pearson Correlation: 0.5961
+• Spearman Correlation: 0.5757
+• Predictions within 10%: 12.1%
+• Predictions within 20%: 23.3%
+• Predictions within 30%: 37.0%
+• Relative Bias: 6.8%
+• Mean Actual: 114.9
+• Mean Predicted: 122.8
+
+YARDS PREDICTION PERFORMANCE
+------------------------------
+• R² Score: 0.2998
+• Mean Absolute Error: 261.01
+• Root Mean Square Error: 334.82
+• Mean Absolute Percentage Error: 651.2%
+• Pearson Correlation: 0.5592
+• Spearman Correlation: 0.5501
+• Predictions within 10%: 11.3%
+• Predictions within 20%: 22.4%
+• Predictions within 30%: 32.2%
+• Relative Bias: 4.9%
+• Mean Actual: 492.3
+• Mean Predicted: 516.6
+
+TOUCHDOWNS PREDICTION PERFORMANCE
+------------------------------
+• R² Score: 0.1682
+• Mean Absolute Error: 2.49
+• Root Mean Square Error: 3.45
+• Mean Absolute Percentage Error: 98.5%
+• Pearson Correlation: 0.4492
+• Spearman Correlation: 0.4533
+• Predictions within 10%: 14.4%
+• Predictions within 20%: 17.7%
+• Predictions within 30%: 21.7%
+• Relative Bias: -18.5%
+• Mean Actual: 3.7
+• Mean Predicted: 3.0
+
+MODEL ANALYSIS
+---------------
+Strengths:
+• Model shows baseline predictive capability
+
+Weaknesses:
+• Touchdown prediction challenging (high variance)
+• Attempt prediction has high percentage error
+
+RECOMMENDATIONS
+---------------
+• Focus on yards predictions for fantasy/betting applications
+• Use ensemble approach for robustness
+• Consider additional features for TD prediction improvement
+• Regular model retraining recommended
+• Monitor for concept drift in modern NFL
+
+STATISTICAL SIGNIFICANCE
+-------------------------
+• Attempts Correlation: Highly Significant (p = 0.000000)
+• Yards Correlation: Highly Significant (p = 0.000000)
+• Touchdowns Correlation: Highly Significant (p = 0.000000)
