@@ -1,29 +1,21 @@
-"""
-wr_ml_projections_rf.py
-
-Random Forest model to project WR stats.
-Train on 1990-2010, backtest on 2011-2024.
-FIXED: Prevents data leakage in backtesting.
-"""
-
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
 from sklearn.model_selection import GridSearchCV, cross_val_score
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.linear_model import Ridge, LinearRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.impute import SimpleImputer
 import warnings
 warnings.filterwarnings('ignore')
 
-# Set style
 plt.style.use('seaborn-v0_8')
 sns.set_palette("husl")
 
-class WRProjectionModelRF:
+class WRProjectionModel:
     def __init__(self, data_dir="nfl_wr_data"):
         self.data_dir = Path(data_dir)
         self.scaler = StandardScaler()
@@ -32,42 +24,81 @@ class WRProjectionModelRF:
         self.feature_importance = {}
         
     def load_data(self):
-        """Load and combine all WR datasets."""
+        """Load and combine all WR datasets including red zone data."""
         print("📊 Loading WR data...")
         
-        # Load receiving data (primary)
-        receiving_file = self.data_dir / "all_receiving_data.csv"
-        if not receiving_file.exists():
-            raise FileNotFoundError("Run the WR data downloader first!")
+        comprehensive_file = self.data_dir / "/Users/rubenchung/Desktop/GitHUB/XGBoost_Model.py/Full_RZ_19902024.csv"
+        comprehensive_df = pd.DataFrame()
         
-        receiving_df = pd.read_csv(receiving_file)
-        print(f"  ✅ Loaded {len(receiving_df)} receiving records")
+        if comprehensive_file.exists():
+            comprehensive_df = pd.read_csv(comprehensive_file)
+            print(f"  ✅ Loaded {len(comprehensive_df)} comprehensive WR records with red zone data")
+        else:
+            comprehensive_file_alt = Path("nfl_wr_data_1990_2024_20250813_122914.csv")
+            if comprehensive_file_alt.exists():
+                comprehensive_df = pd.read_csv(comprehensive_file_alt)
+                print(f"  ✅ Loaded {len(comprehensive_df)} comprehensive WR records with red zone data (from current directory)")
         
-        # Load rushing data (secondary) 
-        rushing_file = self.data_dir / "all_rushing_data.csv"
+
+        if not comprehensive_df.empty:
+            comp_years = sorted(comprehensive_df['Year'].unique())
+            print(f"  📅 Comprehensive data covers years: {comp_years[0]}-{comp_years[-1]} ({len(comp_years)} years)")
+        
+            receiving_file = self.data_dir / "/Users/rubenchung/Desktop/GitHUB/nfl_wr_data/all_receiving_data.csv"
+            if receiving_file.exists():
+                receiving_df = pd.read_csv(receiving_file)
+                print(f"  ✅ Also loaded {len(receiving_df)} basic receiving records")
+
+                if 'Team' in comprehensive_df.columns and 'Tm' not in comprehensive_df.columns:
+                    comprehensive_df = comprehensive_df.rename(columns={'Team': 'Tm'})
+                
+                df = receiving_df.copy()
+                
+                rz_merge_cols = ['Player', 'Year']
+                rz_cols = rz_merge_cols + [col for col in comprehensive_df.columns if col.startswith('RZ_')]
+                
+                df = df.merge(comprehensive_df[rz_cols + ['Tm']], on=rz_merge_cols, how='left', suffixes=('', '_rz'))
+                
+
+                if 'Tm_rz' in df.columns:
+                    df['Tm'] = df['Tm_rz'].fillna(df['Tm'])
+                    df = df.drop(columns=['Tm_rz'])
+                
+                print(f"  🎯 Added red zone features: {[col for col in rz_cols if col.startswith('RZ_')]}")
+                
+            else:
+                df = comprehensive_df.copy()
+                if 'Team' in df.columns:
+                    df = df.rename(columns={'Team': 'Tm'})
+                print("  ⚠️  Using red zone data as primary dataset (no basic receiving stats found)")
+        
+        else:
+            print("  ⚠️  Comprehensive red zone file not found, using separate files...")
+        
+            receiving_file = self.data_dir / "/Users/rubenchung/Desktop/GitHUB/nfl_wr_data/all_receiving_data.csv"
+            if not receiving_file.exists():
+                raise FileNotFoundError("Run the WR data downloader first!")
+            
+            receiving_df = pd.read_csv(receiving_file)
+            print(f"  ✅ Loaded {len(receiving_df)} receiving records")
+            df = receiving_df.copy()
+        
+        rushing_file = self.data_dir / "/Users/rubenchung/Desktop/GitHUB/nfl_wr_data/all_rushing_data.csv"
         rushing_df = pd.DataFrame()
         if rushing_file.exists():
             rushing_df = pd.read_csv(rushing_file)
             print(f"  ✅ Loaded {len(rushing_df)} WR rushing records")
+            
+            merge_cols = ['Player', 'Year']
+            rush_cols = merge_cols + [col for col in rushing_df.columns if col.startswith('Rush_')]
+            df = df.merge(rushing_df[rush_cols], on=merge_cols, how='left')
         
-        # Load team stats
         team_file = self.data_dir / "all_team_stats.csv"
         team_df = pd.DataFrame()
         if team_file.exists():
             team_df = pd.read_csv(team_file)
             print(f"  ✅ Loaded {len(team_df)} team stat records")
-        
-        # Merge datasets
-        df = receiving_df.copy()
-        
-        # Add rushing stats for WRs (merge on Player and Year only)
-        if not rushing_df.empty:
-            merge_cols = ['Player', 'Year']
-            rush_cols = merge_cols + [col for col in rushing_df.columns if col.startswith('Rush_')]
-            df = df.merge(rushing_df[rush_cols], on=merge_cols, how='left')
-        
-        # Add team context
-        if not team_df.empty:
+            
             team_cols = ['Tm', 'Year', 'PF', 'PA', 'TOT', 'Ply', 'Y/P']
             available_team_cols = [col for col in team_cols if col in team_df.columns]
             if len(available_team_cols) >= 2:
@@ -75,11 +106,18 @@ class WRProjectionModelRF:
         
         self.raw_data = df
         print(f"  ✅ Combined dataset: {len(df)} records, {len(df.columns)} features")
+        
+        if any(col.startswith('RZ_') for col in df.columns):
+            rz_coverage = df[df['RZ_Targets'].notna() & (df['RZ_Targets'] > 0)]
+            if not rz_coverage.empty:
+                rz_years = sorted(rz_coverage['Year'].unique())
+                print(f"  🎯 Red zone data available for years: {rz_years[0]}-{rz_years[-1]} ({len(rz_years)} years, {len(rz_coverage)} records)")
+            else:
+                print("  ⚠️  No red zone data found in merged dataset")
+        
         return df
     
     def engineer_base_features(self, df):
-        """Create base features that don't involve temporal dependencies."""
-        print("🔧 Engineering base features...")
         
         # Fill missing values
         numeric_cols = df.select_dtypes(include=[np.number]).columns
@@ -91,31 +129,51 @@ class WRProjectionModelRF:
             df['Prime_Age'] = ((df['Age'] >= 25) & (df['Age'] <= 29)).astype(int)
             df['Rookie_Sophomore'] = (df['Age'] <= 23).astype(int)
         
-        # Current year efficiency metrics (no temporal leakage)
+        # Current year efficiency metrics
         if 'Tgt' in df.columns and 'Rec' in df.columns:
-            df['Target_Share'] = df['Tgt'] / df['G'].clip(lower=1)  # Targets per game
+            df['Target_Share'] = df['Tgt'] / df['G'].clip(lower=1)  
             df['Catch_Rate'] = df['Rec'] / df['Tgt'].clip(lower=1)
         
         if 'Yds' in df.columns:
             df['Yards_Per_Game'] = df['Yds'] / df['G'].clip(lower=1)
             
-        # Red zone efficiency proxy (TDs per reception, TDs per target)
+        # Red zone efficiency metrics 
+        if 'RZ_Targets' in df.columns:
+            df['RZ_Targets_Per_Game'] = df['RZ_Targets'] / df['G'].clip(lower=1)
+            
+        if 'RZ_Receptions' in df.columns and 'RZ_Targets' in df.columns:
+            df['RZ_Catch_Rate'] = df['RZ_Receptions'] / df['RZ_Targets'].clip(lower=1)
+            
+        if 'RZ_TDs' in df.columns:
+            df['RZ_TD_Per_Game'] = df['RZ_TDs'] / df['G'].clip(lower=1)
+            
+        if 'RZ_TDs' in df.columns and 'RZ_Targets' in df.columns:
+            df['RZ_TD_Conversion'] = df['RZ_TDs'] / df['RZ_Targets'].clip(lower=1)
+            
+        if 'RZ_TDs' in df.columns and 'RZ_Receptions' in df.columns:
+            df['RZ_TD_Per_Catch'] = df['RZ_TDs'] / df['RZ_Receptions'].clip(lower=1)
+        
+        # Red zone opportunity share 
+        if 'RZ_Targets' in df.columns and 'Tgt' in df.columns:
+            df['RZ_Target_Share'] = df['RZ_Targets'] / df['Tgt'].clip(lower=1)
+        
+        # Red zone efficiency proxy 
+        if 'Y/R' in df.columns:
+            df['High_YPR'] = (df['Y/R'] > 12).astype(int)  
+        
+        # Standard TD efficiency metrics
         if 'TD' in df.columns and 'Rec' in df.columns:
             df['TD_Per_Reception'] = df['TD'] / df['Rec'].clip(lower=1)
         
         if 'TD' in df.columns and 'Tgt' in df.columns:
             df['TD_Per_Target'] = df['TD'] / df['Tgt'].clip(lower=1)
         
-        # High-value target indicator (longer plays more likely to be TDs)
-        if 'Y/R' in df.columns:
-            df['High_YPR'] = (df['Y/R'] > 12).astype(int)  # Above average yards per reception
-        
         # Team strength features
-        if 'PF' in df.columns:  # Points For
+        if 'PF' in df.columns:
             df['Team_Offense_Strength'] = df['PF'] / df['G'].clip(lower=1)
         
         # Games played consistency
-        df['Games_Played_Rate'] = df['G'] / 16  # Assuming 16 game seasons (adjust for era)
+        df['Games_Played_Rate'] = df['G'] / 16  
         
         print(f"  ✅ Base feature engineering complete: {len(df.columns)} total features")
         return df
@@ -130,26 +188,26 @@ class WRProjectionModelRF:
         """
         print(f"⏰ Engineering temporal features (max_year: {max_year})...")
         
-        # Sort by player and year
+
         df = df.sort_values(['Player', 'Year'])
         
-        # Filter data for feature creation if max_year specified
+
         if max_year is not None:
             feature_data = df[df['Year'] <= max_year].copy()
         else:
             feature_data = df.copy()
         
-        # Experience proxy (years in dataset for same player)
+        # Experience proxy 
         feature_data['Experience'] = feature_data.groupby('Player').cumcount()
         
-        # Previous year performance (lag features) - only using data up to max_year
-        lag_cols = ['Tgt', 'Rec', 'Yds', 'TD', 'Y/R']
+        # Previous year performance 
+        lag_cols = ['Tgt', 'Rec', 'Yds', 'TD', 'Y/R', 'RZ_Targets', 'RZ_TDs', 'RZ_Receptions']
         for col in lag_cols:
             if col in feature_data.columns:
                 feature_data[f'{col}_Prev'] = feature_data.groupby('Player')[col].shift(1)
         
-        # Rolling averages (2-year) - only using data up to max_year
-        rolling_cols = ['TD', 'Yds', 'Rec', 'Tgt']
+        # Rolling averages (2-year) 
+        rolling_cols = ['TD', 'Yds', 'Rec', 'Tgt', 'RZ_Targets', 'RZ_TDs', 'RZ_Receptions']
         for col in rolling_cols:
             if col in feature_data.columns:
                 feature_data[f'{col}_Avg2'] = feature_data.groupby('Player')[col].rolling(2, min_periods=1).mean().reset_index(0, drop=True)
@@ -165,7 +223,7 @@ class WRProjectionModelRF:
         # Merge back to original data
         result_df = df.merge(temporal_features, on=merge_keys, how='left')
         
-        # Fill NaN values in temporal features (for players without history)
+        # Fill NaN values in temporal features
         for col in temporal_cols:
             if col in result_df.columns:
                 result_df[col] = result_df[col].fillna(0)
@@ -178,20 +236,32 @@ class WRProjectionModelRF:
         print("🎯 Preparing modeling data for TD projections...")
         
         # Remove non-predictive columns
-        exclude_cols = ['Player', 'Tm', 'Pos', 'Year']
+        exclude_cols = ['Player', 'Tm', 'Pos', 'Year', 'Source']
         
         # Only keep numeric columns for features
         numeric_cols = df.select_dtypes(include=[np.number]).columns
         feature_cols = [col for col in numeric_cols if col not in exclude_cols + target_cols]
         
+        # Show red zone features that will be used
+        rz_features = [col for col in feature_cols if 'RZ_' in col or 'rz_' in col.lower()]
+        if rz_features:
+            print(f"  🎯 Red zone features included: {rz_features}")
+        else:
+            print("  ⚠️  No red zone features found in feature set")
+        
         print(f"  📊 Using {len(feature_cols)} numeric features to predict TDs")
         
-        # Filter to players with minimum activity (focus on players with receiving activity)
-        df_model = df[(df['G'] >= 4) & (df['Tgt'] >= 10)].copy()  # Minimum thresholds
+        # Filter to players with minimum activity 
+        df_model = df[(df['G'] >= 4) & (df['Tgt'] >= 10)].copy()  
         
         X = df_model[feature_cols]
         
-        # Prepare target (TD only)
+        # Check red zone data availability in modeling dataset
+        if rz_features:
+            rz_data_available = df_model[rz_features[0]].notna().sum()
+            print(f"  📊 Records with red zone data: {rz_data_available}/{len(df_model)} ({rz_data_available/len(df_model)*100:.1f}%)")
+        
+        # Prepare target (TD)
         targets = {}
         if 'TD' in df_model.columns:
             targets['TD'] = df_model['TD']
@@ -199,36 +269,18 @@ class WRProjectionModelRF:
         
         self.feature_names = feature_cols
         
-        print(f"  ✅ Modeling data ready:")
-        print(f"     • {len(X)} player-seasons")
-        print(f"     • {len(feature_cols)} features")
-        print(f"     • Predicting: Receiving TDs")
-        
         return X, targets, df_model
     
     def train_models(self, X_train, y_train_dict):
-        """Train Random Forest model for each target variable."""
-        print("🌲 Training Random Forest model...")
         
-        # Handle missing values ONLY on training data (no scaling needed for RF)
         X_train_imputed = self.imputer.fit_transform(X_train)
-        X_train_final = pd.DataFrame(X_train_imputed, columns=self.feature_names, index=X_train.index)
+        X_train_scaled = self.scaler.fit_transform(X_train_imputed)
+        X_train_final = pd.DataFrame(X_train_scaled, columns=self.feature_names, index=X_train.index)
         
-        # Random Forest configuration
-        model = RandomForestRegressor(
-            n_estimators=200,           # More trees for better performance
-            max_depth=10,               # Prevent overfitting
-            min_samples_split=10,       # Require minimum samples to split
-            min_samples_leaf=5,         # Require minimum samples in leaf
-            max_features='sqrt',        # Use sqrt of features for each split
-            random_state=42,
-            n_jobs=-1,
-            bootstrap=True,
-            oob_score=True              # Out-of-bag scoring
-        )
+        model = LinearRegression()
         
         for target_name, y_train in y_train_dict.items():
-            print(f"\n  🎯 Training Random Forest for {target_name}...")
+            print(f"\n  🎯 Training Linear Regression for {target_name}...")
             
             self.models[target_name] = {}
             
@@ -239,38 +291,32 @@ class WRProjectionModelRF:
             cv_scores = cross_val_score(model, X_train_final, y_train, cv=5, scoring='neg_mean_absolute_error')
             cv_mae = -cv_scores.mean()
             
-            # Out-of-bag score
-            oob_score = model.oob_score_
-            
-            self.models[target_name]['RandomForest'] = {
+            self.models[target_name]['Linear'] = {
                 'model': model,
                 'cv_mae': cv_mae,
-                'cv_std': cv_scores.std(),
-                'oob_r2': oob_score
+                'cv_std': cv_scores.std()
             }
             
-            print(f"    Random Forest: CV MAE = {cv_mae:.2f} ± {cv_scores.std():.2f}")
-            print(f"    Out-of-Bag R² = {oob_score:.3f}")
+            print(f"    Linear Regression: CV MAE = {cv_mae:.2f} ± {cv_scores.std():.2f}")
             
-            # Feature importance
+            # Feature importance 
             importance_df = pd.DataFrame({
                 'feature': self.feature_names,
-                'importance': model.feature_importances_
-            }).sort_values('importance', ascending=False)
+                'coefficient': model.coef_,
+                'abs_coefficient': np.abs(model.coef_)
+            }).sort_values('abs_coefficient', ascending=False)
             
             self.feature_importance[target_name] = importance_df
             
-            print(f"    Top 5 features for {target_name}:")
+            print(f"    Top 5 features for {target_name} (by coefficient magnitude):")
             for _, row in importance_df.head().iterrows():
-                print(f"      • {row['feature']}: {row['importance']:.3f}")
+                print(f"      • {row['feature']}: {row['coefficient']:.3f}")
     
     def evaluate_models(self, X_test, y_test_dict, test_data):
-        """Evaluate Random Forest model on test set."""
-        print("\n📊 Evaluating Random Forest on test set (2011-2024)...")
         
-        # Transform test data using fitted imputer (no scaling needed for RF)
         X_test_imputed = self.imputer.transform(X_test)
-        X_test_final = pd.DataFrame(X_test_imputed, columns=self.feature_names, index=X_test.index)
+        X_test_scaled = self.scaler.transform(X_test_imputed)
+        X_test_final = pd.DataFrame(X_test_scaled, columns=self.feature_names, index=X_test.index)
         
         results = {}
         predictions = {}
@@ -278,7 +324,7 @@ class WRProjectionModelRF:
         for target_name, y_test in y_test_dict.items():
             print(f"\n  🎯 {target_name} Results:")
             
-            model_info = self.models[target_name]['RandomForest']
+            model_info = self.models[target_name]['Linear']
             model = model_info['model']
             
             # Predictions
@@ -298,24 +344,23 @@ class WRProjectionModelRF:
             
             predictions[target_name] = y_pred
             
-            print(f"    Random Forest: MAE={mae:.2f}, RMSE={rmse:.2f}, R²={r2:.3f}")
+            print(f"    Linear Regression: MAE={mae:.2f}, RMSE={rmse:.2f}, R²={r2:.3f}")
         
         self.test_results = results
         self.test_predictions = predictions
         
         return results, predictions
     
-    def create_projections(self, current_year_data, model_choice='RandomForest'):
-        """Create TD projections for current year using Random Forest."""
-        print(f"\n🔮 Creating TD projections using Random Forest...")
+    def create_projections(self, current_year_data, model_choice='Linear'):
         
         # Prepare current year data same way as training
         X_current = current_year_data[self.feature_names]
         X_current_imputed = self.imputer.transform(X_current)
+        X_current_scaled = self.scaler.transform(X_current_imputed)
         
         # Get TD projections
-        td_model = self.models['TD']['RandomForest']['model']
-        td_proj = td_model.predict(X_current_imputed)
+        td_model = self.models['TD']['Linear']['model']
+        td_proj = td_model.predict(X_current_scaled)
         
         # Create projections dataframe
         proj_df = current_year_data[['Player', 'Tm', 'Age', 'G', 'GS']].copy()
@@ -337,150 +382,93 @@ class WRProjectionModelRF:
         return proj_df
     
     def plot_results(self, figsize=(12, 8)):
-        """Create visualizations of Random Forest TD projection model performance."""
-        print("📈 Creating TD projection visualizations...")
-        
+
         fig, axes = plt.subplots(2, 2, figsize=figsize)
-        fig.suptitle('WR TD Random Forest Model Results (2011-2024 Backtest)', fontsize=16, fontweight='bold')
+        fig.suptitle('WR TD Linear Regression Model Results (2011-2024 Backtest)', fontsize=16, fontweight='bold')
         
-        # Model performance metrics
         ax1 = axes[0, 0]
         mae_score = self.test_results['TD']['MAE']
         r2_score = self.test_results['TD']['R²']
         rmse_score = self.test_results['TD']['RMSE']
-        oob_r2 = self.models['TD']['RandomForest']['oob_r2']
         
-        metrics = ['MAE', 'RMSE', 'Test R²', 'OOB R²']
-        values = [mae_score, rmse_score, r2_score, oob_r2]
-        colors = ['skyblue', 'lightgreen', 'coral', 'gold']
+        metrics = ['MAE', 'RMSE', 'R²']
+        values = [mae_score, rmse_score, r2_score]
+        colors = ['skyblue', 'lightgreen', 'coral']
         
         bars = ax1.bar(metrics, values, alpha=0.7, color=colors)
-        ax1.set_title('Random Forest Performance', fontweight='bold')
+        ax1.set_title('Linear Regression Performance', fontweight='bold')
         ax1.set_ylabel('Score')
-        ax1.tick_params(axis='x', rotation=45)
         
-        # Add value labels on bars
         for bar, value in zip(bars, values):
             ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(values)*0.01,
-                   f'{value:.3f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
+                   f'{value:.3f}', ha='center', va='bottom', fontsize=11, fontweight='bold')
         
-        # Feature importance (top 12)
         if 'TD' in self.feature_importance:
             ax2 = axes[0, 1]
-            importance_df = self.feature_importance['TD'].head(12)
-            bars2 = ax2.barh(importance_df['feature'], importance_df['importance'], alpha=0.7, color='forestgreen')
-            ax2.set_title('Top 12 Feature Importances', fontweight='bold')
-            ax2.set_xlabel('Importance Score')
+            importance_df = self.feature_importance['TD'].head(10)
+            colors_coef = ['red' if x < 0 else 'blue' for x in importance_df['coefficient']]
+            bars2 = ax2.barh(importance_df['feature'], importance_df['coefficient'], alpha=0.7, color=colors_coef)
+            ax2.set_title('Top 10 Feature Coefficients', fontweight='bold')
+            ax2.set_xlabel('Coefficient Value')
             ax2.invert_yaxis()
+            ax2.axvline(x=0, color='black', linestyle='-', alpha=0.3)
         
-        # Feature importance distribution
         if 'TD' in self.feature_importance:
             ax3 = axes[1, 0]
-            importance_values = self.feature_importance['TD']['importance']
-            ax3.hist(importance_values, bins=20, alpha=0.7, color='lightblue', edgecolor='black')
-            ax3.set_title('Feature Importance Distribution', fontweight='bold')
-            ax3.set_xlabel('Importance Score')
-            ax3.set_ylabel('Number of Features')
-            ax3.axvline(importance_values.mean(), color='red', linestyle='--', label=f'Mean: {importance_values.mean():.3f}')
-            ax3.legend()
-        
-        # Model summary
+            importance_df = self.feature_importance['TD'].head(8)
+            bars3 = ax3.barh(importance_df['feature'], importance_df['abs_coefficient'], alpha=0.7, color='lightblue')
+            ax3.set_title('Top Features by Coefficient Magnitude', fontweight='bold')
+            ax3.set_xlabel('|Coefficient|')
+            ax3.invert_yaxis()
+
         ax4 = axes[1, 1]
         ax4.axis('off')
-        cv_mae = self.models['TD']['RandomForest']['cv_mae']
-        cv_std = self.models['TD']['RandomForest']['cv_std']
-        
         summary_text = f"""
-Random Forest TD Model Summary
+Linear Regression TD Model Summary
 
-Model Configuration:
-• 200 trees, max_depth=10
-• min_samples_split=10
-• sqrt features per split
-
-Cross-Validation MAE: 
-{cv_mae:.2f} ± {cv_std:.2f}
+Cross-Validation MAE: {self.models['TD']['Linear']['cv_mae']:.2f} ± {self.models['TD']['Linear']['cv_std']:.2f}
 
 Test Set Performance:
 • MAE: {mae_score:.2f} TDs
 • RMSE: {rmse_score:.2f} TDs  
 • R²: {r2_score:.3f}
-• OOB R²: {oob_r2:.3f}
-
-Model Characteristics:
-• Handles non-linear patterns
-• Feature interactions captured
-• Robust to outliers
-• Built-in feature selection
         """
-        ax4.text(0.05, 0.95, summary_text, transform=ax4.transAxes, fontsize=9,
-                verticalalignment='top', bbox=dict(boxstyle="round,pad=0.5", facecolor="lightgreen", alpha=0.8))
+        ax4.text(0.1, 0.9, summary_text, transform=ax4.transAxes, fontsize=10,
+                verticalalignment='top', bbox=dict(boxstyle="round,pad=0.5", facecolor="lightgray", alpha=0.8))
         
         plt.tight_layout()
         plt.show()
         
-        # Feature importance plot (separate, larger)
+        # Feature coefficients plot (separate, larger)
         if self.feature_importance and 'TD' in self.feature_importance:
-            self._plot_td_feature_importance()
+            self._plot_td_feature_coefficients()
     
-    def _plot_td_feature_importance(self):
-        """Plot detailed feature importance for TD prediction."""
+    def _plot_td_feature_coefficients(self):
         plt.figure(figsize=(12, 10))
         
         importance_df = self.feature_importance['TD'].head(20)
         
-        # Color bars by importance level
-        colors = plt.cm.RdYlGn(importance_df['importance'] / importance_df['importance'].max())
-        bars = plt.barh(importance_df['feature'], importance_df['importance'], alpha=0.8, color=colors)
+        colors = ['red' if x < 0 else 'blue' for x in importance_df['coefficient']]
+        bars = plt.barh(importance_df['feature'], importance_df['coefficient'], alpha=0.8, color=colors)
         
-        plt.title('Feature Importance for TD Prediction (Random Forest)', fontsize=14, fontweight='bold')
-        plt.xlabel('Importance Score', fontsize=12)
+        plt.title('Feature Coefficients for TD Prediction (Linear Regression)', fontsize=14, fontweight='bold')
+        plt.xlabel('Coefficient Value', fontsize=12)
         plt.ylabel('Features', fontsize=12)
         
-        # Add importance value labels
-        for i, (bar, importance) in enumerate(zip(bars, importance_df['importance'])):
-            plt.text(bar.get_width() + max(importance_df['importance'])*0.01, bar.get_y() + bar.get_height()/2,
-                    f'{importance:.3f}', va='center', fontsize=8)
+        # Add vertical line at 0
+        plt.axvline(x=0, color='black', linestyle='-', alpha=0.3)
         
-        # Add legend for color scale
-        plt.text(0.02, 0.98, 'Color scale: Red (low) → Yellow → Green (high importance)', 
+        # Add legend
+        plt.text(0.02, 0.98, 'Blue: Positive effect on TDs\nRed: Negative effect on TDs', 
                 transform=plt.gca().transAxes, verticalalignment='top',
                 bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
         
-        # Invert y-axis to show most important at top
+        # Invert y-axis to show highest absolute coefficients at top
         plt.gca().invert_yaxis()
         plt.tight_layout()
         plt.show()
     
-    def get_model_insights(self):
-        """Get insights about the Random Forest model."""
-        print("\n🌲 RANDOM FOREST MODEL INSIGHTS")
-        print("=" * 40)
-        
-        if 'TD' in self.models and 'TD' in self.feature_importance:
-            model = self.models['TD']['RandomForest']['model']
-            importance_df = self.feature_importance['TD']
-            
-            print(f"📊 Model Configuration:")
-            print(f"  • Number of trees: {model.n_estimators}")
-            print(f"  • Max depth: {model.max_depth}")
-            print(f"  • Features per split: {model.max_features}")
-            print(f"  • Min samples split: {model.min_samples_split}")
-            
-            print(f"\n📈 Feature Analysis:")
-            print(f"  • Total features: {len(self.feature_names)}")
-            print(f"  • Most important: {importance_df.iloc[0]['feature']} ({importance_df.iloc[0]['importance']:.3f})")
-            print(f"  • Features with >1% importance: {(importance_df['importance'] > 0.01).sum()}")
-            print(f"  • Mean importance: {importance_df['importance'].mean():.3f}")
-            
-            print(f"\n🎯 Top 10 Most Important Features:")
-            for i, row in importance_df.head(10).iterrows():
-                print(f"  {i+1:2d}. {row['feature']:<25} {row['importance']:.3f}")
-    
     def run_full_analysis(self):
-        """Run complete WR projection analysis with Random Forest."""
-        print("🏈 STARTING WR RANDOM FOREST PROJECTION ANALYSIS")
-        print("=" * 60)
         
         # Load and prepare base data
         df = self.load_data()
@@ -525,33 +513,20 @@ Model Characteristics:
         # Evaluate on test set
         results, predictions = self.evaluate_models(X_test, y_test_dict, model_data[test_mask])
         
-        # Get model insights
-        self.get_model_insights()
-        
         # Create visualizations
         self.plot_results()
         
         # Summary
         mae_score = results['TD']['MAE']
         r2_score = results['TD']['R²']
-        oob_r2 = self.models['TD']['RandomForest']['oob_r2']
-        
-        print(f"\n🎉 RANDOM FOREST TD PROJECTION ANALYSIS COMPLETE!")
-        print(f"✅ Trained Random Forest model to predict receiving TDs")
-        print(f"✅ Backtested on {len(X_test)} player-seasons (2011-2024)")
-        print(f"✅ Random Forest: R² = {r2_score:.3f}, MAE = {mae_score:.2f} TDs")
-        print(f"✅ Out-of-Bag R² = {oob_r2:.3f} (internal validation)")
-        print(f"✅ Data leakage prevented through proper temporal validation")
-        print(f"✅ Model captures non-linear patterns and feature interactions")
-        print(f"✅ Expected R² range: 0.25-0.50 (realistic for RF TD prediction)")
         
         return results
 
 def main():
-    """Run the WR Random Forest projection analysis."""
+    """Run the WR projection analysis."""
     
     # Initialize model
-    wr_model = WRProjectionModelRF()
+    wr_model = WRProjectionModel()
     
     # Run full analysis
     results = wr_model.run_full_analysis()
@@ -565,3 +540,34 @@ def main():
 
 if __name__ == "__main__":
     model, results = main()
+
+    # === Generate 2025 projection input using latest player-season stats ===
+    print("\n📅 Generating 2025 projection rows...")
+
+    latest_season = 2024
+    df = model.raw_data.copy()
+
+    # Get latest year of data per player
+    latest_per_player = df[df['Year'] == latest_season].copy()
+    latest_per_player['Year'] = 2025  # Relabel for prediction
+
+    # Re-engineer features
+    latest_per_player = model.engineer_base_features(latest_per_player)
+    latest_per_player = model.engineer_temporal_features(latest_per_player, max_year=latest_season)
+
+    # Drop TD column if still present (since we are projecting it)
+    if 'TD' in latest_per_player.columns:
+        latest_per_player = latest_per_player.drop(columns=['TD'])
+
+    # Filter eligible WRs
+    eligible_2025 = latest_per_player[(latest_per_player['G'] >= 4) & (latest_per_player['Tgt'] >= 10)].copy()
+
+    if eligible_2025.empty:
+        print("⚠️ No WRs eligible for 2025 projection.")
+    else:
+        # Generate projections
+        proj_2025_df = model.create_projections(eligible_2025)
+        
+        # Show top 10
+        print("\n🏆 Top 10 Projected WR TD Scorers for 2025:")
+        print(proj_2025_df[['Player', 'Tm', 'Age', 'G', 'TD_Proj', 'TD_Per_Game', 'TD_Tier']].head(10).to_string(index=False))
